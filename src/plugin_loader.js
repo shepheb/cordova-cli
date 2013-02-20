@@ -187,7 +187,7 @@ module.exports = function plugin_loader(platform) {
                 dirname = dirname.substring(0, lastSlash);
             }
 
-            shell.mkdir('-p', path.join(platformPluginsDir, dirname));
+            shell.mkdir('-p', path.join(platformPluginsDir, plugin_id, dirname));
 
             // Read in the file, prepend the cordova.define, and write it back out.
             var moduleName = plugin_id + '.';
@@ -200,10 +200,10 @@ module.exports = function plugin_loader(platform) {
 
             var scriptContent = fs.readFileSync(path.join(pluginDir, module.attrib.src), 'utf-8');
             scriptContent = 'cordova.define("' + moduleName + '", function(require, exports, module) {' + scriptContent + '});\n';
-            fs.writeFileSync(path.join(platformPluginsDir, module.attrib.src), scriptContent, 'utf-8');
+            fs.writeFileSync(path.join(platformPluginsDir, plugin_id, module.attrib.src), scriptContent, 'utf-8');
 
             // Prepare the injected Javascript code.
-            var jsFile = 'plugins/' + module.attrib.src;
+            var jsFile = path.join('plugins', plugin_id, module.attrib.src);
             js += 'scriptCounter++;\n';
             js += 'var script = document.createElement("script");\n';
             js += 'script.onload = scriptCallback;\n';
