@@ -29,90 +29,6 @@ var path            = require('path'),
     et              = require('elementtree');
 
 
-function codeForMapper() {
-    return [
-        'cordova.define("cordova-cli/runtimemapper", function(require, exports, module) {',
-            'var mappings = [];',
-
-            'exports.reset = function() { mappings.length = 0; }',
-
-            'function addEntry(strategy, moduleName, symbolPath) {',
-                'mappings.push({ strategy: strategy, moduleName: moduleName, symbolPath: symbolPath });',
-            '}',
-
-            'function prepareNamespace(symbolPath, context) {',
-                'if (!symbolPath) return context;',
-                'var parts = symbolPath.split(".");',
-                'var cur = context;',
-                'for (var i = 0, part; part = parts[i]; ++i) {',
-                    'cur[part] = cur[part] || {};',
-                '}',
-                'return cur[parts[i-1]];',
-            '}',
-
-            'function defineGetter(obj, key, getFunc) {',
-                'if (Object.defineProperty) {',
-                    'var desc = { get: getFunc, configurable: true };',
-                    'Object.defineProperty(obj, key, desc);',
-                '} else {',
-                    'obj.__defineGetter__(key, getFunc);',
-                '}',
-            '}',
-
-            'function clobber(obj, key, value) {',
-                'obj[key] = value;',
-                'if(obj[key] !== value) {',
-                    'defineGetter(obj, key, function() { return value; });',
-                '}',
-            '}',
-
-            'function recursiveMerge(target, src) {',
-                'for (var prop in src) {',
-                    'if (src.hasOwnProperty(prop)) {',
-                        'if (target.prototype && target.prototype.constructor == target) {',
-                            'clobber(target.prototype, prop, src[prop]);',
-                        '} else {',
-                            'if (typeof src[prop] === "object" && typeof target[prop] === "object") {',
-                                'recursiveMerge(target[prop], src[prop]);',
-                            '} else {',
-                                'clobber(target, prop, src[prop]);',
-                            '}',
-                        '}',
-                    '}',
-                '}',
-            '}',
-
-            'exports.clobbers = function(moduleName, symbolPath) {',
-                'addEntry("c", moduleName, symbolPath);',
-            '}',
-            'exports.merges = function(moduleName, symbolPath) {',
-                'addEntry("m", moduleName, symbolPath);',
-            '}',
-            'exports.runs = function(moduleName) {',
-                'addEntry("r", moduleName, "");',
-            '}',
-            'exports.mapModules = function(context) {',
-                'for(var i = 0; i < symbolList.length; i++) {',
-                    'var symbol = symbolList[i];',
-                    'var lastDot = symbol.symbolPath.lastIndexOf(".");',
-                    'var namespace = symbol.symbolPath.substr(0, lastDot);',
-                    'var lastName = symbolPath.substr(lastDot + 1);',
-                    'var module = require(symbol.moduleName);',
-                    'var parentObj = prepareNamespace(namespace, context);',
-                    'var target = parentObj[lastName];',
-                    'if (strategy == "m" && target) {',
-                        'recursiveMerge(target, module);',
-                    '} else {',
-                        'clobber(parentObj, lastName, module);',
-                    '}',
-                    // Note that <runs /> is handled, since we already require()d it.
-                '}',
-            '}',
-        '});'
-    ].join('\n');
-}
-
-
 // Called during cordova prepare.
 // Sets up each plugin's Javascript code to be loaded properly.
 module.exports = function plugin_loader(platform) {
@@ -132,17 +48,34 @@ module.exports = function plugin_loader(platform) {
     var plugins = ls(plugins_dir);
 
 
-    // Top-level code across plugins.
-    var mapperJS = codeForMapper(); // The module mapper module.
-    var js = ''; // The initially injected JS.
-    var lateJS = ''; // The JS that runs after all modules are loaded.
+    // Placed at the top of cordova.js to delay onDeviceReady until all the plugins
+    // are actually loaded. This is a temporary hack that can be removed once this
+    // prototype is rolled into the main code.
+    var topJS = 'window.__onPluginsLoadedHack = true;\n';
+
+    // The main injected JS, used to inject <script> tags.
+    var js = '';
+
+    // The last part of the injected JS, which runs after all plugins are loaded and
+    // registers the clobbers, merges and runs.
+    var lateJS = '';
+
     // Add the callback function.
-    js += 'var mapper = cordova.require("cordova-cli/runtimemapper");\n';
-    js += 'mapper.reset();\n'; // Should be a clean list of modules to inject.
+    js += 'var mapper = cordova.require("cordova/modulemapper");\n';
     js += 'var scriptCounter = 0;\n';
     js += 'var scriptCallback = function() {\n';
     js += 'scriptCounter--;\n';
     js += 'if (scriptCounter == 0) { scriptsLoaded(); } };\n';
+
+    // <script> tag injection function
+    js += 'function injectScript(path) {\n';
+        js += 'scriptCounter++;\n';
+        js += 'var script = document.createElement("script");\n';
+        js += 'script.onload = scriptCallback;\n';
+        js += 'script.src = path;\n';
+        js += 'document.querySelector("head").appendChild(script);\n';
+    js += '}\n\n';
+
 
     // Acquire the platform's parser.
     var parser;
@@ -204,12 +137,7 @@ module.exports = function plugin_loader(platform) {
 
             // Prepare the injected Javascript code.
             var jsFile = path.join('plugins', plugin_id, module.attrib.src);
-            js += 'scriptCounter++;\n';
-            js += 'var script = document.createElement("script");\n';
-            js += 'script.onload = scriptCallback;\n';
-            js += 'script.src = "' + jsFile + '"\n;';
-            js += 'document.querySelector("head").appendChild(script);\n';
-            js += '\n';
+            js += 'injectScript("' + jsFile + '");\n';
 
             // Loop over the children, injecting clobber, merge and run code for each.
             module.getchildren().forEach(function(child) {
@@ -225,14 +153,18 @@ module.exports = function plugin_loader(platform) {
         });
     });
 
+    // Last step in lateJS that runs after the <script> tags have all loaded and
+    // all modules are properly clobbered: fire onPluginsReady event.
+    lateJS += 'cordova.require("cordova/channel").onPluginsReady.fire();\n';
+
     // Wrap lateJS into scriptsLoaded(), which will be called after the last <script>
     // has finished loading.
-    lateJS = 'function scriptsLoaded() {\nconsole.log("scriptsLoaded");\n' + lateJS + '\n}\n';
+    lateJS = 'function scriptsLoaded() {\n' + lateJS + '\n}\n';
 
     // Now write the generated JS to the platform's cordova.js
     var cordovaJSPath = path.join(parser.www_dir(), 'cordova.js');
     var cordovaJS = fs.readFileSync(cordovaJSPath, 'utf-8');
-    cordovaJS += '(function() { ' + mapperJS + js + lateJS + '})();';
+    cordovaJS = topJS + cordovaJS + '(function() { ' + js + lateJS + '})();';
     fs.writeFileSync(cordovaJSPath, cordovaJS, 'utf-8');
 };
 
