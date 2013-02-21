@@ -34,7 +34,7 @@ function codeForMapper() {
         'cordova.define("cordova-cli/runtimemapper", function(require, exports, module) {',
             'var mappings = [];',
 
-            'exports.reset = function() { mappings = []; }',
+            'exports.reset = function() { mappings.length = 0; }',
 
             'function addEntry(strategy, moduleName, symbolPath) {',
                 'mappings.push({ strategy: strategy, moduleName: moduleName, symbolPath: symbolPath });',
@@ -194,8 +194,8 @@ module.exports = function plugin_loader(platform) {
             if (module.attrib.name) {
                 moduleName += module.attrib.name;
             } else {
-                var result = module.attrib.src.match(new RegExp('/([^/\.]+)\.js'));
-                moduleName += module.attrib.name.result[1];
+                var result = module.attrib.src.match(/([^\/]+)\.js/);
+                moduleName += result[1];
             }
 
             var scriptContent = fs.readFileSync(path.join(pluginDir, module.attrib.src), 'utf-8');
